@@ -75,6 +75,8 @@ features = [
 ]
 ```
 
+Both `GovDataReader` and `UbaAirReader` above accept any `feature_names` unconditionally; see "Decline Names You Cannot Confirm" below before shipping either as written.
+
 ## Non-File / HTTP Sources
 
 `ReadFile`'s default matching (`match_read_file_data_access`) is file-suffix and directory shaped. For a non-file source (an HTTP endpoint returning JSON), the sanctioned recipe is: subclass `ReadFile`, override `match_subclass_data_access` and `load_data` wholesale. On that path `suffix()` is never consulted (it is inert), so you do not implement it.
@@ -82,6 +84,33 @@ features = [
 `ApiInputData` is not the tool for this despite its name: it injects in-memory data passed through the API request and is not an HTTP client.
 
 A reader that overrides `load_data` wholesale is classified as a final reader structurally; no reader code runs during classification.
+
+### Decline Names You Cannot Confirm
+
+A wholesale `match_subclass_data_access` override replaces `ReadFile`'s own column check entirely, so nothing stops it from claiming a feature name it has no way to verify. If a chained group elsewhere forwards this reader's option key for a name like `value__rebased` (Pattern 26), an unconditional accept collides with that group and resolution fails with `Multiple feature groups found`, pointing at neither reader as the cause.
+
+Decline a name that carries the chain separator before accepting the data access (core only strips a multi-output `~N` suffix, so a wholesale override never sees `COLUMN_SEPARATOR` on the matching path; check for it anyway if you call `match_subclass_data_access` directly, e.g. from a test):
+
+```python
+from mloda.provider import CHAIN_SEPARATOR, COLUMN_SEPARATOR
+
+
+class UbaAirReader(ReadFile):
+    """REST JSON endpoint."""
+
+    @classmethod
+    def match_subclass_data_access(cls, data_access: Any, feature_names: list[str], options: Options) -> Any:
+        if any(CHAIN_SEPARATOR in name or COLUMN_SEPARATOR in name for name in feature_names):
+            return None
+        if isinstance(data_access, str) and data_access.startswith("https://api."):
+            return data_access
+        return None
+
+    @classmethod
+    def load_data(cls, data_access: Any, features: FeatureSet) -> Any: ...  # HTTP GET, normalize JSON, return the table
+```
+
+A stock `ReadFile` subclass that never implements `get_column_names`, and a stock `ReadDB` subclass that never implements `check_feature_in_data_access`, already decline a chain-separated name for free from mloda core. Only a wholesale `match_subclass_data_access` override needs the decline written out like this.
 
 ## Test
 
